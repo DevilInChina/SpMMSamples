@@ -13,15 +13,16 @@ int cmp(const void *a, const void *b) {
     return *((int *) a) - *((int *) b);
 }
 
-#define NNZ 50
+#define NNZ 20
 #define WARMUP_TIMES 5
 #define VALUE_TYPE double
 #define BENCH_TIMES 10
 
 void GenerateCsr(int **RowPtr, int **ColIdx, int m) {
     srand(m);
+    const int nnzRate = NNZ/100.0*m;
     *RowPtr = (int *) malloc(sizeof(int) * (m + 1));
-    *ColIdx = (int *) malloc(sizeof(int) * (m * NNZ));
+    *ColIdx = (int *) malloc(sizeof(int) * (m * nnzRate));
 
     int *randCol = (int *) malloc(sizeof(int) * m * 2);
     for (int i = 0; i < m; ++i) {
@@ -33,8 +34,9 @@ void GenerateCsr(int **RowPtr, int **ColIdx, int m) {
     }
     memcpy(randCol + m, randCol, sizeof(int) * m);
     (*RowPtr)[0] = 0;
+
     for (int i = 1; i <= m; ++i) {
-        int nnz = rand() % NNZ + 1;
+        int nnz = rand() % nnzRate + 1;
         if (nnz > m)nnz = m;
         (*RowPtr)[i] = (*RowPtr)[i - 1] + nnz;
         int buff = rand() % m;
@@ -351,29 +353,32 @@ int main(int argc, char **argv) {
     printf("Matrix A is %i x %i, matrix B is %i x %i\n", m, m, m, width);
     printf("Matrix A has a sparsity of %.3f%%\n", RowPtr[m] * 100.0 / m / m);
 
+    double gflops_D = 2.0*m*m*width/1e9;
+    double gflops_S = 2.0*RowPtr[m]*width/1e9;
+
     GeMM(m, width, DenseMatrixVal, RightThinMatrix, Res_Golden, &time_value);
     const char *Name = "GeMM";
-    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms\n",
-           Name, time_value);
+    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
+           Name, time_value,gflops_D/time_value);
 
 
     csrSpMM(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
     Name = "csrSpMM";
-    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms\n",
-           Name, time_value);
+    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
+           Name, time_value,gflops_S/time_value);
     compareUndPrint(Name, Res, Res_Golden, m, width);
 
 
     spMM_cuda_yours(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
     Name = "cudaSpMM";
-    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms\n",
-           Name, time_value);
+    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
+           Name, time_value,gflops_S/time_value);
     compareUndPrint(Name, Res, Res_Golden, m, width);
 
     spMM_cusparse(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
     Name = "cusparse";
-    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms\n",
-           Name, time_value);
+    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
+           Name, time_value,gflops_S/time_value);
     compareUndPrint(Name, Res, Res_Golden, m, width);
 
 
