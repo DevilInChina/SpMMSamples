@@ -1,7 +1,8 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cusparse.h>
+#include "my_time.h"
 
 void swap(int *a, int *b) {
     if (*a != *b)
@@ -49,11 +50,10 @@ void GeMM(int m, int width,
           VALUE_TYPE *MatrixVal, VALUE_TYPE *denseRightMatrix,
           VALUE_TYPE *Res, double *time_val) {
 
-    struct timeval t1, t2;
     *time_val = 0;
     for (int _ = 0; _ < BENCH_TIMES; ++_) {
         memset(Res, 0, sizeof(VALUE_TYPE) * width * m);
-        gettimeofday(&t1, NULL);
+        timeStart();
 #pragma omp parallel for
         for (int i = 0; i < m; ++i) {
             for (int j = 0; j < m; ++j) {
@@ -62,8 +62,8 @@ void GeMM(int m, int width,
                 }
             }
         }
-        gettimeofday(&t2, NULL);
-        *time_val += ((t2.tv_sec - t1.tv_sec) * 1000.0 + (t2.tv_usec - t1.tv_usec) / 1000.0);
+
+        *time_val += timeCut();
     }
     *time_val /= BENCH_TIMES;
 }
@@ -71,11 +71,11 @@ void GeMM(int m, int width,
 void csrSpMM(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
              int width, VALUE_TYPE *denseRightMatrix, VALUE_TYPE *Res, double *time_val) {
 
-    struct timeval t1, t2;
+
     *time_val = 0;
     for (int _ = 0; _ < BENCH_TIMES; ++_) {
         memset(Res, 0, sizeof(VALUE_TYPE) * width * m);
-        gettimeofday(&t1, NULL);
+        timeStart();
 #pragma omp parallel for
         for (int i = 0; i < m; ++i) {
             for (int j = RowPtr[i]; j < RowPtr[i + 1]; ++j) {
@@ -84,8 +84,8 @@ void csrSpMM(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
                 }
             }
         }
-        gettimeofday(&t2, NULL);
-        *time_val += ((t2.tv_sec - t1.tv_sec) * 1000.0 + (t2.tv_usec - t1.tv_usec) / 1000.0);
+
+        *time_val += timeCut();
     }
     *time_val /= BENCH_TIMES;
 }
@@ -110,12 +110,11 @@ __global__ void SpMMKernel(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
 // by accumulating results into Cvalue
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     //int col = blockIdx.y * blockDim.y + threadIdx.y;
-    for(int k = 0 ; k < width ; ++k) {
+    for (int k = 0; k < width; ++k) {
         Res[row * width + k] = 0;
     }
     for (int j = RowPtr[row]; j < RowPtr[row + 1]; ++j) {
-        double val = 0;
-        for(int k = 0 ; k < width ; ++k) {
+        for (int k = 0; k < width; ++k) {
             Res[row * width + k] += CsrVal[j] * denseRightMatrix[ColIdx[j] * width + k];
         }
     }
@@ -158,28 +157,27 @@ void spMM_cuda_yours(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
 
         ///// edit your warmup code here
 
-        SpMMKernel<<<dimGrid,dimBlock>>>(m,d_RowPtr,d_ColIdx,d_CsrVal,
-                                         width,d_denseRightMatrix,d_Res);
+        SpMMKernel<<<dimGrid, dimBlock>>>(m, d_RowPtr, d_ColIdx, d_CsrVal,
+                                          width, d_denseRightMatrix, d_Res);
         ////
     }
-    timeval t1, t2;
+
     cudaDeviceSynchronize();
     *time_value = 0;
     for (int i = 0; i < BENCH_TIMES; ++i) {
         // cublasSgemm('N', 'N', m, n, k, 1.0f, d_A, m, d_B, k, 0, d_C, m);
-
-        gettimeofday(&t1, nullptr);
+        timeStart();
         ///// edit your code here
 
-        SpMMKernel<<<dimGrid,dimBlock>>>(m,d_RowPtr,d_ColIdx,d_CsrVal,
-                                         width,d_denseRightMatrix,d_Res);
+        SpMMKernel<<<dimGrid, dimBlock>>>(m, d_RowPtr, d_ColIdx, d_CsrVal,
+                                          width, d_denseRightMatrix, d_Res);
 
 
         ////
 
         cudaDeviceSynchronize();
-        gettimeofday(&t2, nullptr);
-        *time_value += (t2.tv_sec - t1.tv_sec) + (t2.tv_usec - t1.tv_usec) / 1000000.0;
+
+        *time_value += timeCut();
     }
 
 
