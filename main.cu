@@ -3,7 +3,7 @@
 #include <cstring>
 #include <cusparse.h>
 #include "my_time.h"
-
+#define BLOCK_SIZE 16
 void swap(int *a, int *b) {
     if (*a != *b)
         *a ^= *b ^= *a ^= *b;
@@ -20,7 +20,7 @@ int cmp(const void *a, const void *b) {
 
 void GenerateCsr(int **RowPtr, int **ColIdx, int m) {
     srand(m);
-    const int nnzRate = NNZ/100.0*m;
+    const int nnzRate = NNZ / 100.0 * m;
     *RowPtr = (int *) malloc(sizeof(int) * (m + 1));
     *ColIdx = (int *) malloc(sizeof(int) * (m * nnzRate));
 
@@ -51,20 +51,21 @@ void GenerateCsr(int **RowPtr, int **ColIdx, int m) {
 void toColIndx(int line, int ld, VALUE_TYPE *val) {
     VALUE_TYPE *temp = (VALUE_TYPE *) malloc(sizeof(VALUE_TYPE) * line * ld);
 
-    for(int i = 0 ; i < ld ; ++i){
-        for(int j = 0 ; j < line ; ++j){
-            temp[i*line+j] = val[j*ld + i];
+    for (int i = 0; i < ld; ++i) {
+        for (int j = 0; j < line; ++j) {
+            temp[i * line + j] = val[j * ld + i];
         }
     }
     memcpy(val, temp, sizeof(VALUE_TYPE) * line * ld);
     free(temp);
 }
+
 void toRowIndx(int line, int ld, VALUE_TYPE *val) {
     VALUE_TYPE *temp = (VALUE_TYPE *) malloc(sizeof(VALUE_TYPE) * line * ld);
 
-    for(int i = 0 ; i < line ; ++i){
-        for(int j = 0 ; j < ld ; ++j){
-            temp[i*ld+j] = val[j*line + i];
+    for (int i = 0; i < line; ++i) {
+        for (int j = 0; j < ld; ++j) {
+            temp[i * ld + j] = val[j * line + i];
         }
     }
     memcpy(val, temp, sizeof(VALUE_TYPE) * line * ld);
@@ -119,11 +120,11 @@ void compareUndPrint(const char *name, const double *C_Golden, const double *C_r
 
     int count1 = 0;
 
- //   for (int i = 0; i < m * n; i++)
-   //     printf("%d %d %f %f\n",i/n,i%n,C_ref[i],C_Golden[i]);
+    //   for (int i = 0; i < m * n; i++)
+    //     printf("%d %d %f %f\n",i/n,i%n,C_ref[i],C_Golden[i]);
     for (int i = 0; i < m * n; i++)
         if (C_Golden[i] != C_ref[i]) {
-                //printf("%d %d %f %f\n",i/n,i%n,C_ref[i],C_Golden[i]);
+            //printf("%d %d %f %f\n",i/n,i%n,C_ref[i],C_Golden[i]);
             count1++;
         }
     if (count1 == 0)
@@ -137,19 +138,21 @@ __global__ void SpMMKernel(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
 // Each thread computes one element of C
 // by accumulating results into Cvalue
     int row = blockIdx.x * blockDim.x + threadIdx.x;
-    //int col = blockIdx.y * blockDim.y + threadIdx.y;
-    for (int k = 0; k < width; ++k) {
-        Res[row * width + k] = 0;
-    }
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    //for (int k = 0; k < width; ++k) {
+    //  Res[row * width + k] = 0;
+    //}
+    if(row >= m || col >= width) return;
+    double val = 0;
     for (int j = RowPtr[row]; j < RowPtr[row + 1]; ++j) {
-        for (int k = 0; k < width; ++k) {
-            Res[row * width + k] += CsrVal[j] * denseRightMatrix[ColIdx[j] * width + k];
-        }
+        //for (int k = 0; k < width; ++k) {
+        val += CsrVal[j] * denseRightMatrix[ColIdx[j] * width + col];
+        //}
     }
+    Res[row * width + col] = val;
 }
 
-
-void spMM_cuda_yours(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
+void spMM_cuda1_yours(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
                      int width, VALUE_TYPE *denseRightMatrix, VALUE_TYPE *Res, double *time_value) {
 
     int *d_RowPtr, *d_ColIdx;
@@ -179,7 +182,79 @@ void spMM_cuda_yours(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
 
     cudaMalloc(&d_Res, size);
     dim3 dimBlock(1, 1);
-    dim3 dimGrid(m, 1);
+    dim3 dimGrid((m), (width));
+
+    for (int i = 0; i < WARMUP_TIMES; ++i) {
+
+        ///// edit your warmup code here
+
+        SpMMKernel<<<dimGrid, dimBlock>>>(m, d_RowPtr, d_ColIdx, d_CsrVal,
+                                          width, d_denseRightMatrix, d_Res);
+        ////
+    }
+
+    cudaDeviceSynchronize();
+    *time_value = 0;
+    for (int i = 0; i < BENCH_TIMES; ++i) {
+        // cublasSgemm('N', 'N', m, n, k, 1.0f, d_A, m, d_B, k, 0, d_C, m);
+        timeStart();
+        ///// edit your code here
+
+        SpMMKernel<<<dimGrid, dimBlock>>>(m, d_RowPtr, d_ColIdx, d_CsrVal,
+                                          width, d_denseRightMatrix, d_Res);
+
+
+        ////
+
+        cudaDeviceSynchronize();
+
+        *time_value += timeCut();
+    }
+
+
+    *time_value /= BENCH_TIMES;
+    cudaMemcpy(Res, d_Res, size,
+               cudaMemcpyDeviceToHost);
+
+    cudaFree(d_ColIdx);
+    cudaFree(d_Res);
+    cudaFree(d_CsrVal);
+    cudaFree(d_RowPtr);
+    cudaFree(d_denseRightMatrix);
+
+}
+
+void spMM_cuda16_yours(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
+                     int width, VALUE_TYPE *denseRightMatrix, VALUE_TYPE *Res, double *time_value) {
+
+    int *d_RowPtr, *d_ColIdx;
+
+    size_t size = (m + 1) * sizeof(int);
+    cudaMalloc(&d_RowPtr, size);
+    cudaMemcpy(d_RowPtr, RowPtr, size,
+               cudaMemcpyHostToDevice);
+
+    size = RowPtr[m] * sizeof(int);
+    cudaMalloc(&d_ColIdx, size);
+    cudaMemcpy(d_ColIdx, ColIdx, size,
+               cudaMemcpyHostToDevice);
+// Allocate C in device memory
+
+    double *d_CsrVal, *d_denseRightMatrix, *d_Res;
+    size = RowPtr[m] * sizeof(double);
+    cudaMalloc(&d_CsrVal, size);
+    cudaMemcpy(d_CsrVal, CsrVal, size,
+               cudaMemcpyHostToDevice);
+
+    size = sizeof(double) * m * width;
+
+    cudaMalloc(&d_denseRightMatrix, size);
+    cudaMemcpy(d_denseRightMatrix, denseRightMatrix, size,
+               cudaMemcpyHostToDevice);
+
+    cudaMalloc(&d_Res, size);
+    dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 dimGrid((m+BLOCK_SIZE-1)/BLOCK_SIZE, (width+BLOCK_SIZE-1)/BLOCK_SIZE);
 
     for (int i = 0; i < WARMUP_TIMES; ++i) {
 
@@ -314,7 +389,7 @@ void spMM_cusparse(int m, int *RowPtr, int *ColIdx, VALUE_TYPE *CsrVal,
     cusparseDestroyDnMat(dnsMtx);
     cusparseDestroySpMat(csrMtxA);
     //toRowIndx(m,width,denseRightMatrix);
-    toRowIndx(m,width,Res);
+    toRowIndx(m, width, Res);
 }
 
 int main(int argc, char **argv) {
@@ -353,32 +428,38 @@ int main(int argc, char **argv) {
     printf("Matrix A is %i x %i, matrix B is %i x %i\n", m, m, m, width);
     printf("Matrix A has a sparsity of %.3f%%\n", RowPtr[m] * 100.0 / m / m);
 
-    double gflops_D = 2.0*m*m*width/1e9;
-    double gflops_S = 2.0*RowPtr[m]*width/1e9;
+    double gflops_D = 2.0 * m * m * width / 1e9;
+    double gflops_S = 2.0 * RowPtr[m] * width / 1e9;
 
     GeMM(m, width, DenseMatrixVal, RightThinMatrix, Res_Golden, &time_value);
     const char *Name = "GeMM";
     printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
-           Name, time_value,gflops_D/time_value);
+           Name, time_value, gflops_D / time_value);
 
 
     csrSpMM(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
     Name = "csrSpMM";
     printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
-           Name, time_value,gflops_S/time_value);
+           Name, time_value, gflops_S / time_value);
     compareUndPrint(Name, Res, Res_Golden, m, width);
 
 
-    spMM_cuda_yours(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
-    Name = "cudaSpMM";
+    spMM_cuda1_yours(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
+    Name = "cudaSpMM_1";
     printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
-           Name, time_value,gflops_S/time_value);
+           Name, time_value, gflops_S / time_value);
+    compareUndPrint(Name, Res, Res_Golden, m, width);
+
+    spMM_cuda16_yours(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
+    Name = "cudaSpMM_16";
+    printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
+           Name, time_value, gflops_S / time_value);
     compareUndPrint(Name, Res, Res_Golden, m, width);
 
     spMM_cusparse(m, RowPtr, ColIdx, CsrVal, width, RightThinMatrix, Res, &time_value);
     Name = "cusparse";
     printf("\n(%s)(row-col, A and B are in row-major)) used %4.5f ms, %.5f gflops\n",
-           Name, time_value,gflops_S/time_value);
+           Name, time_value, gflops_S / time_value);
     compareUndPrint(Name, Res, Res_Golden, m, width);
 
 
