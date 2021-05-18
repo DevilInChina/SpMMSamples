@@ -1,5 +1,5 @@
 cc=nvcc
-NVCC_OPTIONS=-lcublas -lcudart -O3 -gencode=arch=compute_61,code=compute_61
+NVCC_OPTIONS=-lcublas -lcudart -O3 -gencode=arch=compute_61,code=compute_61 -lcusparse
 
 ALL:TIME
 	${cc} main.cu time.o -o SpMM ${NVCC_OPTIONS}
